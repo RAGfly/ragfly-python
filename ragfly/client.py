@@ -6,12 +6,19 @@ from urllib.parse import urljoin
 
 import httpx
 
+from .codes import CodeTranslator
 from .models import AskChunk, AskResponse, Chunk, Document, SearchResult
 
 DEFAULT_BASE_URL = "https://api.ragfly.ai"
-_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
-#: Función de interfaz por defecto para ``ask()`` (define el modelo LLM de la conversación).
-DEFAULT_FUNCION = "CHAT-USUARIO"
+# Esquema de timeouts del SDK (h.210):
+# - Requests normales: `timeout` del constructor (default 60s, connect 10s).
+# - Streaming SSE (ask stream=True y ask sync, que lo reusa): SIN read-timeout
+#   (Timeout(None, connect=10.0)) porque la generación LLM puede superar
+#   cualquier tope entre tokens; el truncamiento se detecta por el evento
+#   'done' y la validación de líneas (no por timeout).
+#: Default interface function for ``ask()`` (sets the conversation's LLM model).
+#: English public code; the SDK translates it to the internal code on the wire.
+DEFAULT_FUNCION = "CHAT-USER"
 
 
 class RAGflyError(Exception):
@@ -21,19 +28,19 @@ class RAGflyError(Exception):
 
 
 class RAGfly:
-    """Cliente oficial de RAGfly.
+    """Official RAGfly client.
 
-    Uso básico::
+    Basic usage::
 
         from ragfly import RAGfly
 
         client = RAGfly(api_key="slm_live_...")
-        resp = client.ask("¿Cuáles son las ventas de Q1?")
+        resp = client.ask("What were Q1 sales?")
         print(resp.answer)
 
     Streaming::
 
-        for chunk in client.ask("¿Cuáles son las ventas de Q1?", stream=True):
+        for chunk in client.ask("What were Q1 sales?", stream=True):
             print(chunk.delta, end="", flush=True)
     """
 
@@ -50,6 +57,8 @@ class RAGfly:
             headers={"Authorization": f"Bearer {api_key}"},
         )
         self._async_http: Optional[httpx.AsyncClient] = None
+        # Public-code translator: English on the SDK surface, internal on the wire.
+        self._codes = CodeTranslator(self._fetch_code_map)
 
     # ── Internos ─────────────────────────────────────────────────────────────
 
@@ -65,13 +74,23 @@ class RAGfly:
             raise RAGflyError(detail, status_code=resp.status_code)
 
     def _get_or_create_conversation(self, codigo_funcion: str = DEFAULT_FUNCION) -> int:
-        """Crea una conversación nueva y devuelve su id."""
+        """Create a new conversation and return its id."""
         resp = self._http.post(self._url("/interfaz/conversaciones"), json={
             "titulo": "SDK",
-            "codigo_funcion": codigo_funcion,
+            "codigo_funcion": self._codes.to_internal("function", codigo_funcion),
         })
         self._raise_for_status(resp)
         return resp.json()["id_conversacion"]
+
+    def _fetch_code_map(self) -> dict:
+        """Fetch the public-code map (internal → English) from the backend. Used by
+        the code translator; the map is cached after the first call."""
+        resp = self._http.get(
+            self._url("/catalogo/public-codes"),
+            params={"domains": "status,doc_type,function"},
+        )
+        self._raise_for_status(resp)
+        return resp.json().get("domains", {})
 
     # ── API pública ──────────────────────────────────────────────────────────
 
@@ -84,10 +103,10 @@ class RAGfly:
         codigo_entidad: Optional[str] = None,
         id_espacio: Optional[int] = None,
     ) -> SearchResult:
-        """Búsqueda semántica híbrida (vector + léxico + rerank).
+        """Hybrid semantic search (vector + lexical + rerank).
 
         Returns:
-            :class:`SearchResult` con lista de documentos y sus chunks relevantes.
+            :class:`SearchResult` with the matching documents and their relevant chunks.
         """
         payload = {
             "q": query,
@@ -142,18 +161,18 @@ class RAGfly:
         codigo_funcion: str = DEFAULT_FUNCION,
         stream: bool = False,
     ) -> Union[AskResponse, Iterator[AskChunk]]:
-        """Pregunta al RAG con respuesta completa o streaming.
+        """Ask the RAG for a full or streaming answer.
 
         Args:
-            question: La pregunta en lenguaje natural.
-            conversation_id: Reusar conversación existente. Si es None, crea una nueva.
-            codigo_funcion: Función de interfaz que define el modelo LLM al crear una
-                conversación nueva. Default ``CHAT-USUARIO``. Ignorado si se pasa
-                ``conversation_id``.
-            stream: Si True, devuelve un iterador de :class:`AskChunk`.
+            question: The natural-language question.
+            conversation_id: Reuse an existing conversation. If None, a new one is created.
+            codigo_funcion: Interface function that sets the LLM model when creating a
+                new conversation. Default ``CHAT-USER``. Ignored when ``conversation_id``
+                is given.
+            stream: If True, returns an iterator of :class:`AskChunk`.
 
         Returns:
-            :class:`AskResponse` (stream=False) o ``Iterator[AskChunk]`` (stream=True).
+            :class:`AskResponse` (stream=False) or ``Iterator[AskChunk]`` (stream=True).
         """
         conv_id = conversation_id or self._get_or_create_conversation(codigo_funcion)
 
@@ -173,16 +192,26 @@ class RAGfly:
         ) as resp:
             self._raise_for_status(resp)
             recibio_done = False
+            lineas_malformadas = 0
             for line in resp.iter_lines():
                 if not line.startswith("data: "):
-                    continue
+                    continue  # comentarios SSE (': ping' heartbeat) y líneas vacías
                 try:
                     payload = json.loads(line[6:])
                 except json.JSONDecodeError:
+                    # El backend solo emite JSON en líneas 'data:' — una línea
+                    # malformada es un evento perdido (corte intra-evento, h.217).
+                    lineas_malformadas += 1
                     continue
                 if "error" in payload:
                     raise RAGflyError(payload["error"])
                 if payload.get("done"):
+                    if lineas_malformadas:
+                        raise RAGflyError(
+                            f"El stream llegó al 'done' pero {lineas_malformadas} "
+                            "evento(s) 'data:' venían malformados — la respuesta "
+                            "puede tener huecos."
+                        )
                     recibio_done = True
                     return
                 if "text" in payload:
@@ -214,18 +243,41 @@ class RAGfly:
         *,
         page: int = 1,
         page_size: int = 20,
+        status: Optional[str] = None,
         estado: Optional[str] = None,
     ) -> dict:
-        """Lista documentos del corpus con paginación."""
-        # El backend (GET /documentos/paginado) espera page/limit/codigo_estado_doc.
-        # FastAPI ignora params desconocidos, así que pagina/limite/estado se
-        # traducían en "sin filtro, 50 por defecto".
+        """List documents in the corpus with pagination.
+
+        Args:
+            status: Filter by processing state, in English — e.g. ``VECTORIZED``,
+                ``SCANNED``, ``CHUNKED``, ``LOADED``. Use ``VECTORIZED`` to list only
+                documents that are searchable.
+            estado: Deprecated Spanish alias of ``status`` (kept for compatibility).
+        """
+        # The REST API (GET /documentos/paginado) speaks internal codes; translate the
+        # English public state on the way in and the returned codes on the way out.
+        status = status or estado
         params: dict = {"page": page, "limit": page_size}
-        if estado:
-            params["codigo_estado_doc"] = estado
+        if status:
+            params["codigo_estado_doc"] = self._codes.to_internal("status", status)
         resp = self._http.get(self._url("/documentos/paginado"), params=params)
         self._raise_for_status(resp)
-        return resp.json()
+        return self._translate_documents(resp.json())
+
+    def _translate_documents(self, data: dict) -> dict:
+        """Translate internal catalog codes to their English public alias in a
+        documents response (state + document type of every row)."""
+        if not isinstance(data, dict):
+            return data
+        rows = data.get("items") or data.get("documentos") or data.get("resultados") or []
+        for doc in rows:
+            if not isinstance(doc, dict):
+                continue
+            if doc.get("codigo_estado_doc"):
+                doc["codigo_estado_doc"] = self._codes.to_english("status", doc["codigo_estado_doc"])
+            if doc.get("codigo_tipo_documento"):
+                doc["codigo_tipo_documento"] = self._codes.to_english("doc_type", doc["codigo_tipo_documento"])
+        return data
 
     def close(self) -> None:
         self._http.close()
