@@ -2,12 +2,20 @@
 
 import json
 from typing import Generator, Iterator, Optional, Union
-from urllib.parse import urljoin
+from urllib.parse import quote, urljoin
 
 import httpx
 
 from .codes import CodeTranslator
-from .models import AskChunk, AskResponse, Chunk, Document, SearchResult
+from .models import (
+    AgentContext,
+    AgentLayer,
+    AskChunk,
+    AskResponse,
+    Chunk,
+    Document,
+    SearchResult,
+)
 
 DEFAULT_BASE_URL = "https://api.ragfly.ai"
 # Esquema de timeouts del SDK (h.210):
@@ -93,6 +101,46 @@ class RAGfly:
         return resp.json().get("domains", {})
 
     # ── API pública ──────────────────────────────────────────────────────────
+
+    def agent_context(
+        self,
+        *,
+        function_profile: str = "chat_usuario",
+    ) -> AgentContext:
+        """Return the authenticated prompt, identity and tools for an agent."""
+        resp = self._http.get(
+            self._url("/agent/context"),
+            params={"function_profile": function_profile},
+        )
+        self._raise_for_status(resp)
+        data = resp.json()
+        return AgentContext(
+            function_profile=data["function_profile"],
+            system_prompt=data["system_prompt"],
+            system_prompt_hash=data["system_prompt_hash"],
+            layers=[AgentLayer(**item) for item in data.get("layers", [])],
+            identity=data.get("identity") or {},
+            tools=data.get("tools") or [],
+            limits=data.get("limits") or {},
+        )
+
+    def run_agent_tool(
+        self,
+        public_name: str,
+        arguments: dict,
+        *,
+        function_profile: str = "chat_usuario",
+    ) -> dict:
+        """Run one operation authorized by :meth:`agent_context`."""
+        if not isinstance(arguments, dict):
+            raise TypeError("arguments must be a dict")
+        resp = self._http.post(
+            self._url(f"/agent/tools/{quote(public_name, safe='')}"),
+            params={"function_profile": function_profile},
+            json={"arguments": arguments},
+        )
+        self._raise_for_status(resp)
+        return resp.json()
 
     def search(
         self,

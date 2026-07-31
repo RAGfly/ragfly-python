@@ -43,3 +43,21 @@ class AskResponse:
     answer: str
     conversation_id: int
     message_id: Optional[int] = None
+
+
+@dataclass
+class AgentLayer:
+    code: str
+    name: str
+    sha256: str
+
+
+@dataclass
+class AgentContext:
+    function_profile: str
+    system_prompt: str
+    system_prompt_hash: str
+    layers: list[AgentLayer] = field(default_factory=list)
+    identity: dict = field(default_factory=dict)
+    tools: list[dict] = field(default_factory=list)
+    limits: dict = field(default_factory=dict)
