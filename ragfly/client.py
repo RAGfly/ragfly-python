@@ -1,38 +1,44 @@
-"""RAGfly Python SDK — cliente oficial."""
+"""RAGfly Python SDK — official client for the English REST ``/v1`` contract."""
 
-import json
-from typing import Generator, Iterator, Optional, Union
-from urllib.parse import quote, urljoin
+from typing import Any, Optional
+from urllib.parse import quote
 
 import httpx
 
-from .codes import CodeTranslator
-from .models import (
-    AgentContext,
-    AgentLayer,
-    AskChunk,
-    AskResponse,
-    Chunk,
-    Document,
-    SearchResult,
-)
+from .models import AgentContext, AgentLayer, AskResponse, Chunk, Document, SearchResult
 
 DEFAULT_BASE_URL = "https://api.ragfly.ai"
-# Esquema de timeouts del SDK (h.210):
-# - Requests normales: `timeout` del constructor (default 60s, connect 10s).
-# - Streaming SSE (ask stream=True y ask sync, que lo reusa): SIN read-timeout
-#   (Timeout(None, connect=10.0)) porque la generación LLM puede superar
-#   cualquier tope entre tokens; el truncamiento se detecta por el evento
-#   'done' y la validación de líneas (no por timeout).
 #: Default interface function for ``ask()`` (sets the conversation's LLM model).
-#: English public code; the SDK translates it to the internal code on the wire.
-DEFAULT_FUNCION = "CHAT-USER"
+DEFAULT_FUNCTION = "CHAT-USER"
+CLIENT_HEADER = {"X-RAGfly-Client": "sdk-python"}
 
 
 class RAGflyError(Exception):
-    def __init__(self, message: str, status_code: Optional[int] = None):
+    """A ``/v1`` error: ``status_code``, public ``code`` (e.g. ``NOT_FOUND``) and ``details``."""
+
+    def __init__(
+        self,
+        message: str,
+        status_code: Optional[int] = None,
+        code: Optional[str] = None,
+        details: Optional[dict] = None,
+    ):
         super().__init__(message)
         self.status_code = status_code
+        self.code = code
+        self.details = details or {}
+
+
+def _segment(value: Any) -> str:
+    return quote(str(value), safe="")
+
+
+def _compact(values: dict) -> dict:
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def _query(values: dict) -> dict:
+    return {key: ("true" if value is True else "false" if value is False else value) for key, value in _compact(values).items()}
 
 
 class RAGfly:
@@ -42,14 +48,12 @@ class RAGfly:
 
         from ragfly import RAGfly
 
-        client = RAGfly(api_key="slm_live_...")
-        resp = client.ask("What were Q1 sales?")
-        print(resp.answer)
+        client = RAGfly(api_key="rf_...")
+        print(client.ask("What were Q1 sales?").answer)
 
-    Streaming::
-
-        for chunk in client.ask("What were Q1 sales?", stream=True):
-            print(chunk.delta, end="", flush=True)
+    Every method maps to one ``/v1`` route. Operations of the RAGfly
+    application that have no named route run through :meth:`list_operations`,
+    :meth:`get_operation` and :meth:`run_operation`.
     """
 
     def __init__(
@@ -57,63 +61,175 @@ class RAGfly:
         api_key: str,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = 60.0,
+        *,
+        transport: Optional[httpx.BaseTransport] = None,
     ):
-        self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._http = httpx.Client(
             timeout=httpx.Timeout(timeout, connect=10.0),
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers={"Authorization": f"Bearer {api_key}", **CLIENT_HEADER},
+            transport=transport,
         )
-        self._async_http: Optional[httpx.AsyncClient] = None
-        # Public-code translator: English on the SDK surface, internal on the wire.
-        self._codes = CodeTranslator(self._fetch_code_map)
 
-    # ── Internos ─────────────────────────────────────────────────────────────
+    # ── Transport ────────────────────────────────────────────────────────────
 
-    def _url(self, path: str) -> str:
-        return f"{self._base_url}/{path.lstrip('/')}"
-
-    def _raise_for_status(self, resp: httpx.Response) -> None:
+    def _request(self, method: str, path: str, *, params: Optional[dict] = None, body: Any = None) -> Any:
+        resp = self._http.request(
+            method,
+            f"{self._base_url}{path}",
+            params=_query(params or {}) or None,
+            json=body,
+        )
         if resp.status_code >= 400:
             try:
-                detail = resp.json().get("detail", resp.text)
-            except Exception:
-                detail = resp.text
-            raise RAGflyError(detail, status_code=resp.status_code)
+                payload = resp.json()
+            except ValueError:
+                payload = {}
+            payload = payload if isinstance(payload, dict) else {}
+            raise RAGflyError(
+                payload.get("message") or resp.text or f"HTTP {resp.status_code}",
+                status_code=resp.status_code,
+                code=payload.get("code"),
+                details=payload.get("details"),
+            )
+        if not resp.content:
+            return None
+        return resp.json()
 
-    def _get_or_create_conversation(self, codigo_funcion: str = DEFAULT_FUNCION) -> int:
-        """Create a new conversation and return its id."""
-        resp = self._http.post(self._url("/interfaz/conversaciones"), json={
-            "titulo": "SDK",
-            "codigo_funcion": self._codes.to_internal("function", codigo_funcion),
-        })
-        self._raise_for_status(resp)
-        return resp.json()["id_conversacion"]
+    # ── Session and documents ────────────────────────────────────────────────
 
-    def _fetch_code_map(self) -> dict:
-        """Fetch the public-code map (internal → English) from the backend. Used by
-        the code translator; the map is cached after the first call."""
-        resp = self._http.get(
-            self._url("/catalogo/public-codes"),
-            params={"domains": "status,doc_type,function"},
+    def session(self) -> dict:
+        """Identity, group and entity of the credential."""
+        return self._request("GET", "/v1/session")
+
+    def list_documents(self, *, status: Optional[str] = None, limit: int = 20, page: int = 1) -> dict:
+        """List documents. ``status`` in English, e.g. ``VECTORIZED``."""
+        return self._request("GET", "/v1/documents", params={"status": status, "limit": limit, "page": page})
+
+    def get_document(self, document_code: str) -> dict:
+        return self._request("GET", f"/v1/documents/{_segment(document_code)}")
+
+    def document_edges(self, document_code: str, *, neighbor_limit: int = 50) -> dict:
+        return self._request(
+            "GET", f"/v1/documents/{_segment(document_code)}/edges", params={"neighbor_limit": neighbor_limit}
         )
-        self._raise_for_status(resp)
-        return resp.json().get("domains", {})
 
-    # ── API pública ──────────────────────────────────────────────────────────
-
-    def agent_context(
+    def search(
         self,
+        query: str,
         *,
-        function_profile: str = "chat_usuario",
-    ) -> AgentContext:
-        """Return the authenticated prompt, identity and tools for an agent."""
-        resp = self._http.get(
-            self._url("/agent/context"),
-            params={"function_profile": function_profile},
+        limit: int = 10,
+        min_similarity: float = 0.0,
+        entity_code: Optional[str] = None,
+    ) -> SearchResult:
+        """Hybrid semantic search (vector + lexical)."""
+        data = self._request(
+            "POST",
+            "/v1/documents/search",
+            body=_compact({"query": query, "limit": limit, "min_similarity": min_similarity, "entity_code": entity_code}),
+        ) or {}
+        documents = [
+            Document(
+                code=d.get("code"),
+                name=d.get("name"),
+                summary=d.get("summary"),
+                location=d.get("location"),
+                url=d.get("url"),
+                rrf_score=d.get("rrf_score"),
+                max_similarity=d.get("max_similarity"),
+                rerank_score=d.get("rerank_score"),
+                fs=d.get("fs"),
+                chunks=[
+                    Chunk(text=c.get("text", ""), page=c.get("page"), extra=c.get("extra") or {})
+                    for c in d.get("chunks") or []
+                ],
+            )
+            for d in data.get("documents") or []
+        ]
+        return SearchResult(
+            query=query,
+            total_documents=data.get("total_documents", len(documents)),
+            total_chunks=data.get("total_chunks", 0),
+            duration_ms=data.get("duration_ms"),
+            documents=documents,
         )
-        self._raise_for_status(resp)
-        data = resp.json()
+
+    # ── Working spaces ───────────────────────────────────────────────────────
+
+    def list_spaces(self, *, limit: int = 20) -> dict:
+        return self._request("GET", "/v1/spaces", params={"limit": limit})
+
+    def get_space(self, space_id: int, *, document_limit: int = 20) -> dict:
+        return self._request("GET", f"/v1/spaces/{_segment(space_id)}", params={"document_limit": document_limit})
+
+    def refresh_space(self, space_id: int) -> dict:
+        return self._request("POST", f"/v1/spaces/{_segment(space_id)}/refresh")
+
+    def promote_space(self, space_id: int) -> dict:
+        return self._request("POST", f"/v1/spaces/{_segment(space_id)}/promote")
+
+    def compose_spaces(
+        self, operation: str, space_id_a: int, space_id_b: int, *, name: str = "", space_type: str = "AREA"
+    ) -> dict:
+        """``operation``: union, intersection, difference or symmetric_difference."""
+        return self._request("POST", "/v1/spaces/compose", body={
+            "operation": operation, "space_id_a": space_id_a, "space_id_b": space_id_b,
+            "name": name, "space_type": space_type,
+        })
+
+    def read_space(self, space_id: int, *, resolution: str = "manifest", query: str = "", limit: int = 50) -> dict:
+        """``resolution``: count, manifest, chunks or text."""
+        return self._request(
+            "POST", f"/v1/spaces/{_segment(space_id)}/read",
+            body={"resolution": resolution, "query": query, "limit": limit},
+        )
+
+    # ── Queue, catalog and skills ────────────────────────────────────────────
+
+    def queue(self, *, process: Optional[str] = None, status: Optional[str] = None, limit: int = 20) -> dict:
+        return self._request("GET", "/v1/queue", params={"process": process, "status": status, "limit": limit})
+
+    def list_runs(self, *, limit: int = 10) -> dict:
+        return self._request("GET", "/v1/runs", params={"limit": limit})
+
+    def catalog(self, *, type: str = "ALL") -> dict:
+        """``type``: ALL, FUNCTIONS or SKILLS."""
+        return self._request("GET", "/v1/catalog", params={"type": type})
+
+    def get_function(self, function_code: str) -> dict:
+        """A function (screen) with its behaviors and the operations it allows."""
+        return self._request("GET", f"/v1/functions/{_segment(function_code)}")
+
+    def list_skills(self) -> dict:
+        return self._request("GET", "/v1/skills")
+
+    def get_skill(self, skill_code: str) -> dict:
+        return self._request("GET", f"/v1/skills/{_segment(skill_code)}")
+
+    def run_skill(self, skill_code: str, *, space_id: Optional[int] = None, document_code: Optional[str] = None) -> dict:
+        return self._request(
+            "POST", f"/v1/skills/{_segment(skill_code)}/run",
+            body=_compact({"space_id": space_id, "document_code": document_code}),
+        )
+
+    # ── Answers and agents ───────────────────────────────────────────────────
+
+    def ask(
+        self, question: str, *, conversation_id: Optional[int] = None, function_code: str = DEFAULT_FUNCTION
+    ) -> AskResponse:
+        """RAG end to end: retrieve and generate. Reuse ``conversation_id`` to continue."""
+        data = self._request("POST", "/v1/ask", body=_compact({
+            "question": question, "conversation_id": conversation_id, "function_code": function_code,
+        })) or {}
+        return AskResponse(
+            answer=data.get("answer", ""),
+            conversation_id=data.get("conversation_id"),
+            extra={k: v for k, v in data.items() if k not in {"answer", "conversation_id"}},
+        )
+
+    def agent_context(self, *, function_profile: str = "user_chat") -> AgentContext:
+        """The authenticated prompt, identity and tools for an agent."""
+        data = self._request("GET", "/v1/agent/context", params={"function_profile": function_profile})
         return AgentContext(
             function_profile=data["function_profile"],
             system_prompt=data["system_prompt"],
@@ -124,208 +240,113 @@ class RAGfly:
             limits=data.get("limits") or {},
         )
 
-    def run_agent_tool(
-        self,
-        public_name: str,
-        arguments: dict,
-        *,
-        function_profile: str = "chat_usuario",
-    ) -> dict:
-        """Run one operation authorized by :meth:`agent_context`."""
+    def run_agent_tool(self, public_name: str, arguments: dict, *, function_profile: str = "user_chat") -> Any:
+        """Run one tool authorized by :meth:`agent_context`."""
         if not isinstance(arguments, dict):
             raise TypeError("arguments must be a dict")
-        resp = self._http.post(
-            self._url(f"/agent/tools/{quote(public_name, safe='')}"),
-            params={"function_profile": function_profile},
-            json={"arguments": arguments},
-        )
-        self._raise_for_status(resp)
-        return resp.json()
-
-    def search(
-        self,
-        query: str,
-        *,
-        limit: int = 10,
-        min_similitud: float = 0.0,
-        codigo_entidad: Optional[str] = None,
-        id_espacio: Optional[int] = None,
-    ) -> SearchResult:
-        """Hybrid semantic search (vector + lexical + rerank).
-
-        Returns:
-            :class:`SearchResult` with the matching documents and their relevant chunks.
-        """
-        payload = {
-            "q": query,
-            "limit": limit,
-            "min_similitud": min_similitud,
-        }
-        if codigo_entidad:
-            payload["codigo_entidad"] = codigo_entidad
-        if id_espacio:
-            payload["id_espacio"] = id_espacio
-
-        resp = self._http.post(self._url("/documentos/buscar-semantico"), json=payload)
-        self._raise_for_status(resp)
-        data = resp.json()
-
-        docs = []
-        for d in data.get("resultados", []):
-            chunks = [
-                Chunk(
-                    texto=c.get("texto", ""),
-                    similitud=c.get("similitud"),
-                    score_rerank=c.get("score_rerank"),
-                    # La API expone el nº de página como `nro_pagina` (no `pagina`).
-                    pagina=c.get("nro_pagina"),
-                    extra={k: v for k, v in c.items() if k not in {"texto", "similitud", "score_rerank", "nro_pagina"}},
-                )
-                for c in d.get("chunks", [])
-            ]
-            docs.append(Document(
-                codigo=d["codigo_documento"],
-                nombre=d["nombre_documento"],
-                resumen=d.get("resumen_documento"),
-                url=d.get("url"),
-                rrf_score=d.get("rrf_score"),
-                similitud_max=d.get("similitud_max"),
-                chunks=chunks,
-            ))
-
-        return SearchResult(
-            query=data["q"],
-            total_documentos=data["total_documentos"],
-            total_chunks=data["total_chunks"],
-            duracion_ms=data.get("duracion_ms"),
-            documents=docs,
+        return self._request(
+            "POST", f"/v1/agent/tools/{_segment(public_name)}",
+            body={"arguments": arguments, "function_profile": function_profile},
         )
 
-    def ask(
-        self,
-        question: str,
-        *,
-        conversation_id: Optional[int] = None,
-        codigo_funcion: str = DEFAULT_FUNCION,
-        stream: bool = False,
-    ) -> Union[AskResponse, Iterator[AskChunk]]:
-        """Ask the RAG for a full or streaming answer.
+    # ── Organization profile ─────────────────────────────────────────────────
 
-        Args:
-            question: The natural-language question.
-            conversation_id: Reuse an existing conversation. If None, a new one is created.
-            codigo_funcion: Interface function that sets the LLM model when creating a
-                new conversation. Default ``CHAT-USER``. Ignored when ``conversation_id``
-                is given.
-            stream: If True, returns an iterator of :class:`AskChunk`.
+    def get_organization(self, *, entity_code: Optional[str] = None) -> dict:
+        return self._request("GET", "/v1/organization", params={"entity_code": entity_code})
 
-        Returns:
-            :class:`AskResponse` (stream=False) or ``Iterator[AskChunk]`` (stream=True).
-        """
-        conv_id = conversation_id or self._get_or_create_conversation(codigo_funcion)
-
-        if stream:
-            return self._ask_stream(question, conv_id)
-        return self._ask_sync(question, conv_id)
-
-    def _ask_stream(self, question: str, conv_id: int) -> Iterator[AskChunk]:
-        url = self._url(f"/interfaz/conversaciones/{conv_id}/mensajes/stream")
-        # En streaming NO aplicamos read-timeout: la generación del LLM puede tardar
-        # más que el timeout normal entre tokens, y abortaría el SSE a mitad de
-        # respuesta (httpx.ReadTimeout). Mantenemos solo el connect-timeout. Espejo
-        # del SDK TS, que cancela su timer al recibir los headers de respuesta.
-        with self._http.stream(
-            "POST", url, json={"contenido": question},
-            timeout=httpx.Timeout(None, connect=10.0),
-        ) as resp:
-            self._raise_for_status(resp)
-            recibio_done = False
-            lineas_malformadas = 0
-            for line in resp.iter_lines():
-                if not line.startswith("data: "):
-                    continue  # comentarios SSE (': ping' heartbeat) y líneas vacías
-                try:
-                    payload = json.loads(line[6:])
-                except json.JSONDecodeError:
-                    # El backend solo emite JSON en líneas 'data:' — una línea
-                    # malformada es un evento perdido (corte intra-evento, h.217).
-                    lineas_malformadas += 1
-                    continue
-                if "error" in payload:
-                    raise RAGflyError(payload["error"])
-                if payload.get("done"):
-                    if lineas_malformadas:
-                        raise RAGflyError(
-                            f"El stream llegó al 'done' pero {lineas_malformadas} "
-                            "evento(s) 'data:' venían malformados — la respuesta "
-                            "puede tener huecos."
-                        )
-                    recibio_done = True
-                    return
-                if "text" in payload:
-                    yield AskChunk(delta=payload["text"])
-            # El stream cerró sin el evento `done` final: respuesta truncada
-            # (corte de red, timeout del proxy). No devolver una respuesta
-            # parcial como si fuera completa — propagar como error.
-            if not recibio_done:
-                raise RAGflyError(
-                    "El stream de respuesta se cortó antes de terminar "
-                    "(sin evento 'done'); la respuesta puede estar incompleta."
-                )
-
-    def _ask_sync(self, question: str, conv_id: int) -> AskResponse:
-        buffer = []
-        msg_id = None
-        for chunk in self._ask_stream(question, conv_id):
-            buffer.append(chunk.delta)
-        # El done payload lleva id_mensaje_assistant pero lo emitimos antes de salir
-        # del generator — capturamos el último evento done fuera del yield.
-        return AskResponse(
-            answer="".join(buffer),
-            conversation_id=conv_id,
-            message_id=msg_id,
-        )
-
-    def list_documents(
+    def update_organization(
         self,
         *,
-        page: int = 1,
-        page_size: int = 20,
-        status: Optional[str] = None,
-        estado: Optional[str] = None,
+        group_description: Optional[str] = None,
+        group_system_prompt: Optional[str] = None,
+        entity_description: Optional[str] = None,
+        entity_system_prompt: Optional[str] = None,
+        entity_code: Optional[str] = None,
     ) -> dict:
-        """List documents in the corpus with pagination.
+        """Only the fields you pass are written."""
+        return self._request("PUT", "/v1/organization", body=_compact({
+            "group_description": group_description,
+            "group_system_prompt": group_system_prompt,
+            "entity_description": entity_description,
+            "entity_system_prompt": entity_system_prompt,
+            "entity_code": entity_code,
+        }))
 
-        Args:
-            status: Filter by processing state, in English — e.g. ``VECTORIZED``,
-                ``SCANNED``, ``CHUNKED``, ``LOADED``. Use ``VECTORIZED`` to list only
-                documents that are searchable.
-            estado: Deprecated Spanish alias of ``status`` (kept for compatibility).
-        """
-        # The REST API (GET /documentos/paginado) speaks internal codes; translate the
-        # English public state on the way in and the returned codes on the way out.
-        status = status or estado
-        params: dict = {"page": page, "limit": page_size}
-        if status:
-            params["codigo_estado_doc"] = self._codes.to_internal("status", status)
-        resp = self._http.get(self._url("/documentos/paginado"), params=params)
-        self._raise_for_status(resp)
-        return self._translate_documents(resp.json())
+    def draft_organization(self, *, source_text: str = "", entity_code: Optional[str] = None) -> dict:
+        return self._request(
+            "POST", "/v1/organization/draft", body=_compact({"source_text": source_text, "entity_code": entity_code})
+        )
 
-    def _translate_documents(self, data: dict) -> dict:
-        """Translate internal catalog codes to their English public alias in a
-        documents response (state + document type of every row)."""
-        if not isinstance(data, dict):
-            return data
-        rows = data.get("items") or data.get("documentos") or data.get("resultados") or []
-        for doc in rows:
-            if not isinstance(doc, dict):
-                continue
-            if doc.get("codigo_estado_doc"):
-                doc["codigo_estado_doc"] = self._codes.to_english("status", doc["codigo_estado_doc"])
-            if doc.get("codigo_tipo_documento"):
-                doc["codigo_tipo_documento"] = self._codes.to_english("doc_type", doc["codigo_tipo_documento"])
-        return data
+    # ── Usage, conversations and processes ───────────────────────────────────
+
+    def get_usage(self) -> dict:
+        return self._request("GET", "/v1/usage")
+
+    def list_conversations(self, *, function_code: Optional[str] = None, limit: int = 50) -> dict:
+        return self._request("GET", "/v1/conversations", params={"function_code": function_code, "limit": limit})
+
+    def delete_conversation(self, conversation_id: int) -> Any:
+        return self._request("DELETE", f"/v1/conversations/{_segment(conversation_id)}")
+
+    def list_processes(
+        self,
+        *,
+        status: Optional[str] = None,
+        process_type: Optional[str] = None,
+        category: Optional[str] = None,
+        mine: Optional[bool] = None,
+        only_open: Optional[bool] = None,
+        limit: int = 20,
+        page: int = 1,
+    ) -> dict:
+        return self._request("GET", "/v1/processes", params={
+            "status": status, "process_type": process_type, "category": category,
+            "mine": mine, "only_open": only_open, "limit": limit, "page": page,
+        })
+
+    def get_process(self, process_code: str) -> dict:
+        return self._request("GET", f"/v1/processes/{_segment(process_code)}")
+
+    def update_process(
+        self,
+        process_code: str,
+        *,
+        status: Optional[str] = None,
+        priority: Optional[str] = None,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        comments: Optional[str] = None,
+        assigned_to: Optional[str] = None,
+        due_at: Optional[str] = None,
+        finished_at: Optional[str] = None,
+        cost: Optional[float] = None,
+    ) -> dict:
+        """Only the fields you pass are written."""
+        return self._request("PATCH", f"/v1/processes/{_segment(process_code)}", body=_compact({
+            "status": status, "priority": priority, "name": name, "description": description,
+            "comments": comments, "assigned_to": assigned_to, "due_at": due_at,
+            "finished_at": finished_at, "cost": cost,
+        }))
+
+    # ── Generic operations ───────────────────────────────────────────────────
+
+    def list_operations(self) -> dict:
+        """Operations this credential can run: code, kind and confirm_required."""
+        return self._request("GET", "/v1/operations")
+
+    def get_operation(self, code: str) -> dict:
+        """One operation with its ``input_schema`` and ``output_schema``."""
+        return self._request("GET", f"/v1/operations/{_segment(code)}")
+
+    def run_operation(self, code: str, input: Optional[dict] = None, *, confirm: bool = False) -> dict:
+        """Run an operation. A ``write_confirm`` operation only runs with ``confirm=True``;
+        without it the result is ``{"executed": False, "preview": ...}``."""
+        return self._request(
+            "POST", f"/v1/operations/{_segment(code)}:execute",
+            body={"input": input or {}, "confirm": bool(confirm)},
+        )
+
+    # ── Lifecycle ────────────────────────────────────────────────────────────
 
     def close(self) -> None:
         self._http.close()

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ragfly"
-version = "0.2.0"
+version = "0.3.0"
 description = "RAGfly Python SDK — retrieval infrastructure for your AI agents"
 readme = "README.md"
 license = { text = "MIT" }
@@ -16,7 +16,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://ragfly.ai"
 Documentation = "https://api.ragfly.ai/docs"
-Repository = "https://github.com/rufinocabreragaillard/ragfly-python"
+Repository = "https://github.com/RAGfly/ragfly-python"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ragfly"]

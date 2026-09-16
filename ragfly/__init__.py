@@ -1,8 +1,7 @@
-from .client import RAGfly
+from .client import RAGfly, RAGflyError
 from .models import (
     AgentContext,
     AgentLayer,
-    AskChunk,
     AskResponse,
     Chunk,
     Document,
@@ -11,12 +10,12 @@ from .models import (
 
 __all__ = [
     "RAGfly",
+    "RAGflyError",
     "SearchResult",
     "AskResponse",
-    "AskChunk",
     "Document",
     "Chunk",
     "AgentContext",
     "AgentLayer",
 ]
-__version__ = "0.2.0"
+__version__ = "0.3.0"

@@ -4,45 +4,42 @@ from typing import Optional
 
 @dataclass
 class Chunk:
-    texto: str
-    similitud: Optional[float] = None
-    score_rerank: Optional[float] = None
-    pagina: Optional[int] = None
+    text: str
+    page: Optional[int] = None
     extra: dict = field(default_factory=dict)
 
 
 @dataclass
 class Document:
-    codigo: str
-    nombre: str
-    resumen: Optional[str] = None
+    code: Optional[str]
+    name: Optional[str]
+    summary: Optional[str] = None
+    location: Optional[str] = None
     url: Optional[str] = None
     rrf_score: Optional[float] = None
-    similitud_max: Optional[float] = None
+    max_similarity: Optional[float] = None
+    rerank_score: Optional[float] = None
+    #: How to open the original file (see ``fs.how_to_open``).
+    fs: Optional[dict] = None
     chunks: list[Chunk] = field(default_factory=list)
 
 
 @dataclass
 class SearchResult:
     query: str
-    total_documentos: int
+    total_documents: int
     total_chunks: int
-    duracion_ms: Optional[float]
+    duration_ms: Optional[float]
     documents: list[Document]
 
 
 @dataclass
-class AskChunk:
-    """Un token/fragmento del stream de respuesta."""
-    delta: str
-
-
-@dataclass
 class AskResponse:
-    """Respuesta completa (no-streaming)."""
+    """Full answer of :meth:`RAGfly.ask`."""
     answer: str
-    conversation_id: int
-    message_id: Optional[int] = None
+    conversation_id: Optional[int]
+    #: Remaining fields of the answer (citations, usage, message id…).
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass

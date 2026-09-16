@@ -1,22 +1,16 @@
-"""Ejemplo básico del SDK de RAGfly."""
+"""Basic RAGfly SDK example."""
 from ragfly import RAGfly
 
-client = RAGfly(api_key="slm_live_tu_api_key")
+client = RAGfly(api_key="rf_your_api_key")
 
-# Pregunta simple (respuesta completa)
-resp = client.ask("¿Cuáles son las ventas del Q1?")
-print(resp.answer)
+print(client.ask("What are the Q1 sales figures?").answer)
 
-# Pregunta con streaming
-print("\n--- Streaming ---")
-for chunk in client.ask("Resumí los contratos vigentes", stream=True):
-    print(chunk.delta, end="", flush=True)
-print()
-
-# Búsqueda semántica (solo retrieval, sin generación)
-results = client.search("contratos de mantenimiento", limit=5)
-print(f"\n{results.total_documentos} documentos encontrados")
+results = client.search("maintenance contracts", limit=5)
+print(f"\n{results.total_documents} documents found")
 for doc in results.documents:
-    print(f"  · {doc.nombre} (score: {doc.rrf_score:.3f})")
+    print(f"  · {doc.name} (score: {doc.rrf_score or 0:.3f})")
     for chunk in doc.chunks[:1]:
-        print(f'      "{chunk.texto[:120]}…"')
+        print(f'      "{chunk.text[:120]}…"')
+
+for op in client.list_operations()["operations"][:5]:
+    print(op["code"], op["kind"])
