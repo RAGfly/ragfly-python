@@ -43,3 +43,20 @@ def test_search_and_ask_map_the_english_contract():
     assert result.documents[0].chunks[0].text == "clause"
     assert answer.answer == "Yes." and answer.conversation_id == 9
     assert answer.extra == {"citations": []}
+
+
+def test_agent_context_ignores_layer_fields_it_does_not_know():
+    # A field the server adds to a layer must not break agent_context().
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "function_profile": "user_chat",
+            "system_prompt": "LAYERS",
+            "system_prompt_hash": "abc",
+            "layers": [{"code": "PRODUCT", "name": "Product", "sha256": "p", "version": 2}],
+        })
+
+    with RAGfly(api_key="rf_test", base_url="https://example.test", transport=httpx.MockTransport(handler)) as client:
+        context = client.agent_context()
+
+    assert [layer.code for layer in context.layers] == ["PRODUCT"]
+    assert context.layers[0].sha256 == "p"

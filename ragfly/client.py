@@ -234,7 +234,12 @@ class RAGfly:
             function_profile=data["function_profile"],
             system_prompt=data["system_prompt"],
             system_prompt_hash=data["system_prompt_hash"],
-            layers=[AgentLayer(**item) for item in data.get("layers", [])],
+            # Only the model's fields: a field the server adds later must not break the client.
+            layers=[
+                AgentLayer(code=item.get("code", ""), name=item.get("name", ""), sha256=item.get("sha256", ""))
+                for item in data.get("layers", [])
+                if isinstance(item, dict)
+            ],
             identity=data.get("identity") or {},
             tools=data.get("tools") or [],
             limits=data.get("limits") or {},

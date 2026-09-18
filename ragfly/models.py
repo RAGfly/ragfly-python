@@ -38,7 +38,7 @@ class AskResponse:
     """Full answer of :meth:`RAGfly.ask`."""
     answer: str
     conversation_id: Optional[int]
-    #: Remaining fields of the answer (citations, usage, message id…).
+    #: Remaining fields of the answer, e.g. ``message_id`` and ``user_message_id``.
     extra: dict = field(default_factory=dict)
 
 
