@@ -102,6 +102,12 @@ class RAGfly:
         """Identity, group and entity of the credential."""
         return self._request("GET", "/v1/session")
 
+    def set_active_entity(self, entity_code: Optional[str]) -> dict:
+        """Set an authorized entity focus; pass ``None`` to release it."""
+        return self._request(
+            "POST", "/v1/session/active-entity", body={"entity_code": entity_code}
+        )
+
     def list_documents(self, *, status: Optional[str] = None, limit: int = 20, page: int = 1) -> dict:
         """List documents. ``status`` in English, e.g. ``VECTORIZED``."""
         return self._request("GET", "/v1/documents", params={"status": status, "limit": limit, "page": page})
