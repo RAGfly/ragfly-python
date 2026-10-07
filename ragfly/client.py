@@ -127,13 +127,38 @@ class RAGfly:
         limit: int = 10,
         min_similarity: float = 0.0,
         entity_code: Optional[str] = None,
+        space_id: Optional[int] = None,
     ) -> SearchResult:
-        """Hybrid semantic search (vector + lexical)."""
-        data = self._request(
-            "POST",
-            "/v1/documents/search",
-            body=_compact({"query": query, "limit": limit, "min_similarity": min_similarity, "entity_code": entity_code}),
-        ) or {}
+        """Hybrid semantic search (vector + lexical). ``space_id`` limits it to one working space."""
+        return self._search({
+            "query": query, "limit": limit, "min_similarity": min_similarity,
+            "entity_code": entity_code, "space_id": space_id,
+        }, query)
+
+    def search_filtered(
+        self,
+        query: str,
+        *,
+        filter: dict,
+        limit: Optional[int] = None,
+        min_similarity: Optional[float] = None,
+        entity_code: Optional[str] = None,
+        space_id: Optional[int] = None,
+    ) -> SearchResult:
+        """Search with a structured ``filter`` (``document_types``, ``attributes``, ``characteristics``).
+
+        The catalog codes the filter accepts come from :meth:`list_document_types` and
+        :meth:`list_characteristics`.
+        """
+        if not isinstance(filter, dict):
+            raise TypeError("filter must be a dict")
+        return self._search({
+            "query": query, "filter": filter, "limit": limit, "min_similarity": min_similarity,
+            "entity_code": entity_code, "space_id": space_id,
+        }, query)
+
+    def _search(self, body: dict, query: str) -> SearchResult:
+        data = self._request("POST", "/v1/documents/search", body=_compact(body)) or {}
         documents = [
             Document(
                 code=d.get("code"),
@@ -202,6 +227,18 @@ class RAGfly:
         """``type``: ALL, FUNCTIONS or SKILLS."""
         return self._request("GET", "/v1/catalog", params={"type": type})
 
+    def list_document_types(self, *, entity_code: Optional[str] = None) -> dict:
+        """Document types of the entity as a tree. Their codes go in ``filter.document_types``."""
+        return self._request("GET", "/v1/catalog/document-types", params=_query({"entity_code": entity_code}))
+
+    def list_characteristics(
+        self, *, document_types: Optional[list] = None, entity_code: Optional[str] = None
+    ) -> dict:
+        """Characteristics available for those types (each includes its more specific types)."""
+        return self._request("GET", "/v1/catalog/characteristics", params=_query({
+            "document_types": ",".join(document_types) if document_types else None, "entity_code": entity_code,
+        }))
+
     def get_function(self, function_code: str) -> dict:
         """A function (screen) with its behaviors and the operations it allows."""
         return self._request("GET", f"/v1/functions/{_segment(function_code)}")
@@ -221,11 +258,23 @@ class RAGfly:
     # ── Answers and agents ───────────────────────────────────────────────────
 
     def ask(
-        self, question: str, *, conversation_id: Optional[int] = None, function_code: str = DEFAULT_FUNCTION
+        self,
+        question: str,
+        *,
+        conversation_id: Optional[int] = None,
+        function_code: str = DEFAULT_FUNCTION,
+        mode: Optional[str] = None,
     ) -> AskResponse:
-        """RAG end to end: retrieve and generate. Reuse ``conversation_id`` to continue."""
+        """RAG end to end: retrieve and generate. Reuse ``conversation_id`` to continue.
+
+        ``mode="help"`` answers questions about RAGfly itself (how to use or integrate it)
+        instead of searching your documents, without links to web screens. Left as ``None``
+        the call is the usual document answer.
+        """
+        if mode not in (None, "default", "help"):
+            raise ValueError("mode must be 'default' or 'help'")
         data = self._request("POST", "/v1/ask", body=_compact({
-            "question": question, "conversation_id": conversation_id, "function_code": function_code,
+            "question": question, "conversation_id": conversation_id, "function_code": function_code, "mode": mode,
         })) or {}
         return AskResponse(
             answer=data.get("answer", ""),
