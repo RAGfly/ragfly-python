@@ -108,9 +108,45 @@ class RAGfly:
             "POST", "/v1/session/active-entity", body={"entity_code": entity_code}
         )
 
-    def list_documents(self, *, status: Optional[str] = None, limit: int = 20, page: int = 1) -> dict:
-        """List documents. ``status`` in English, e.g. ``VECTORIZED``."""
-        return self._request("GET", "/v1/documents", params={"status": status, "limit": limit, "page": page})
+    def set_active_area(self, area_code: Optional[str]) -> dict:
+        """Set an authorized area focus (it also selects its entity); pass ``None`` to release it."""
+        return self._request("POST", "/v1/session/active-area", body={"area_code": area_code})
+
+    def list_areas(
+        self,
+        *,
+        entity_code: Optional[str] = None,
+        parent_code: Optional[str] = None,
+        query: Optional[str] = None,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """Visible organizational areas and the cursor of the next page."""
+        return self._request("GET", "/v1/areas", params={
+            "entity_code": entity_code, "parent_code": parent_code, "query": query, "limit": limit, "cursor": cursor,
+        })
+
+    def list_locations(
+        self,
+        *,
+        entity_code: Optional[str] = None,
+        parent_code: Optional[str] = None,
+        query: Optional[str] = None,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """Visible document folders and the cursor of the next page. Their codes go in ``location_code``."""
+        return self._request("GET", "/v1/locations", params={
+            "entity_code": entity_code, "parent_code": parent_code, "query": query, "limit": limit, "cursor": cursor,
+        })
+
+    def list_documents(
+        self, *, status: Optional[str] = None, limit: int = 20, page: int = 1, location_code: Optional[str] = None
+    ) -> dict:
+        """List documents. ``status`` in English, e.g. ``VECTORIZED``; ``location_code`` keeps one folder subtree."""
+        return self._request("GET", "/v1/documents", params={
+            "status": status, "limit": limit, "page": page, "location_code": location_code,
+        })
 
     def get_document(self, document_code: str) -> dict:
         return self._request("GET", f"/v1/documents/{_segment(document_code)}")
@@ -128,11 +164,16 @@ class RAGfly:
         min_similarity: float = 0.0,
         entity_code: Optional[str] = None,
         space_id: Optional[int] = None,
+        location_code: Optional[str] = None,
     ) -> SearchResult:
-        """Hybrid semantic search (vector + lexical). ``space_id`` limits it to one working space."""
+        """Hybrid semantic search (vector + lexical).
+
+        ``space_id`` limits it to one working space; ``location_code`` to one visible folder subtree,
+        for this request only.
+        """
         return self._search({
             "query": query, "limit": limit, "min_similarity": min_similarity,
-            "entity_code": entity_code, "space_id": space_id,
+            "entity_code": entity_code, "space_id": space_id, "location_code": location_code,
         }, query)
 
     def search_filtered(
@@ -144,6 +185,7 @@ class RAGfly:
         min_similarity: Optional[float] = None,
         entity_code: Optional[str] = None,
         space_id: Optional[int] = None,
+        location_code: Optional[str] = None,
     ) -> SearchResult:
         """Search with a structured ``filter`` (``document_types``, ``attributes``, ``characteristics``).
 
@@ -154,7 +196,7 @@ class RAGfly:
             raise TypeError("filter must be a dict")
         return self._search({
             "query": query, "filter": filter, "limit": limit, "min_similarity": min_similarity,
-            "entity_code": entity_code, "space_id": space_id,
+            "entity_code": entity_code, "space_id": space_id, "location_code": location_code,
         }, query)
 
     def _search(self, body: dict, query: str) -> SearchResult:
@@ -263,18 +305,21 @@ class RAGfly:
         *,
         conversation_id: Optional[int] = None,
         function_code: str = DEFAULT_FUNCTION,
+        location_code: Optional[str] = None,
         mode: Optional[str] = None,
     ) -> AskResponse:
         """RAG end to end: retrieve and generate. Reuse ``conversation_id`` to continue.
 
         ``mode="help"`` answers questions about RAGfly itself (how to use or integrate it)
         instead of searching your documents, without links to web screens. Left as ``None``
-        the call is the usual document answer.
+        the call is the usual document answer. ``location_code`` narrows only this request to one
+        visible folder subtree.
         """
         if mode not in (None, "default", "help"):
             raise ValueError("mode must be 'default' or 'help'")
         data = self._request("POST", "/v1/ask", body=_compact({
-            "question": question, "conversation_id": conversation_id, "function_code": function_code, "mode": mode,
+            "question": question, "conversation_id": conversation_id, "function_code": function_code,
+            "location_code": location_code, "mode": mode,
         })) or {}
         return AskResponse(
             answer=data.get("answer", ""),

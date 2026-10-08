@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0 — 2026-10-08
+
+- New `set_active_area(area_code)` (pass `None` to release the area focus and keep the entity), `list_areas()` and `list_locations()` with `entity_code`, `parent_code`, `query`, `limit` and `cursor` paging.
+- `location_code` narrows `list_documents`, `search`, `search_filtered` and `ask` to one visible folder subtree, for that request only.
+
 ## 0.4.0 — 2026-10-07
 
 - `ask(..., mode="help")` answers questions about RAGfly itself (how to use or integrate it), without links to web screens. `mode` is only sent when given.
