@@ -99,23 +99,23 @@ class RAGfly:
     # ── Session and documents ────────────────────────────────────────────────
 
     def session(self) -> dict:
-        """Identity, group and entity of the credential."""
+        """Identity, group and active workspace of the credential."""
         return self._request("GET", "/v1/session")
 
-    def set_active_entity(self, entity_code: Optional[str]) -> dict:
-        """Set an authorized entity focus; pass ``None`` to release it."""
+    def set_active_workspace(self, workspace_code: Optional[str]) -> dict:
+        """Set an authorized workspace focus; pass ``None`` to release it."""
         return self._request(
-            "POST", "/v1/session/active-entity", body={"entity_code": entity_code}
+            "POST", "/v1/session/active-workspace", body={"workspace_code": workspace_code}
         )
 
     def set_active_area(self, area_code: Optional[str]) -> dict:
-        """Set an authorized area focus (it also selects its entity); pass ``None`` to release it."""
+        """Set an authorized area focus (it also selects its workspace); pass ``None`` to release it."""
         return self._request("POST", "/v1/session/active-area", body={"area_code": area_code})
 
     def list_areas(
         self,
         *,
-        entity_code: Optional[str] = None,
+        workspace_code: Optional[str] = None,
         parent_code: Optional[str] = None,
         query: Optional[str] = None,
         limit: int = 50,
@@ -123,13 +123,13 @@ class RAGfly:
     ) -> dict:
         """Visible organizational areas and the cursor of the next page."""
         return self._request("GET", "/v1/areas", params={
-            "entity_code": entity_code, "parent_code": parent_code, "query": query, "limit": limit, "cursor": cursor,
+            "workspace_code": workspace_code, "parent_code": parent_code, "query": query, "limit": limit, "cursor": cursor,
         })
 
     def list_locations(
         self,
         *,
-        entity_code: Optional[str] = None,
+        workspace_code: Optional[str] = None,
         parent_code: Optional[str] = None,
         query: Optional[str] = None,
         limit: int = 50,
@@ -137,7 +137,7 @@ class RAGfly:
     ) -> dict:
         """Visible document folders and the cursor of the next page. Their codes go in ``location_code``."""
         return self._request("GET", "/v1/locations", params={
-            "entity_code": entity_code, "parent_code": parent_code, "query": query, "limit": limit, "cursor": cursor,
+            "workspace_code": workspace_code, "parent_code": parent_code, "query": query, "limit": limit, "cursor": cursor,
         })
 
     def list_documents(
@@ -162,18 +162,18 @@ class RAGfly:
         *,
         limit: int = 10,
         min_similarity: float = 0.0,
-        entity_code: Optional[str] = None,
-        space_id: Optional[int] = None,
+        workspace_code: Optional[str] = None,
+        collection_id: Optional[int] = None,
         location_code: Optional[str] = None,
     ) -> SearchResult:
         """Hybrid semantic search (vector + lexical).
 
-        ``space_id`` limits it to one working space; ``location_code`` to one visible folder subtree,
+        ``collection_id`` limits it to one collection; ``location_code`` to one visible folder subtree,
         for this request only.
         """
         return self._search({
             "query": query, "limit": limit, "min_similarity": min_similarity,
-            "entity_code": entity_code, "space_id": space_id, "location_code": location_code,
+            "workspace_code": workspace_code, "collection_id": collection_id, "location_code": location_code,
         }, query)
 
     def search_filtered(
@@ -183,8 +183,8 @@ class RAGfly:
         filter: dict,
         limit: Optional[int] = None,
         min_similarity: Optional[float] = None,
-        entity_code: Optional[str] = None,
-        space_id: Optional[int] = None,
+        workspace_code: Optional[str] = None,
+        collection_id: Optional[int] = None,
         location_code: Optional[str] = None,
     ) -> SearchResult:
         """Search with a structured ``filter`` (``document_types``, ``attributes``, ``characteristics``).
@@ -196,7 +196,7 @@ class RAGfly:
             raise TypeError("filter must be a dict")
         return self._search({
             "query": query, "filter": filter, "limit": limit, "min_similarity": min_similarity,
-            "entity_code": entity_code, "space_id": space_id, "location_code": location_code,
+            "workspace_code": workspace_code, "collection_id": collection_id, "location_code": location_code,
         }, query)
 
     def _search(self, body: dict, query: str) -> SearchResult:
@@ -227,33 +227,33 @@ class RAGfly:
             documents=documents,
         )
 
-    # ── Working spaces ───────────────────────────────────────────────────────
+    # ── Collections ──────────────────────────────────────────────────────────
 
-    def list_spaces(self, *, limit: int = 20) -> dict:
-        return self._request("GET", "/v1/spaces", params={"limit": limit})
+    def list_collections(self, *, limit: int = 20) -> dict:
+        return self._request("GET", "/v1/collections", params={"limit": limit})
 
-    def get_space(self, space_id: int, *, document_limit: int = 20) -> dict:
-        return self._request("GET", f"/v1/spaces/{_segment(space_id)}", params={"document_limit": document_limit})
+    def get_collection(self, collection_id: int, *, document_limit: int = 20) -> dict:
+        return self._request("GET", f"/v1/collections/{_segment(collection_id)}", params={"document_limit": document_limit})
 
-    def refresh_space(self, space_id: int) -> dict:
-        return self._request("POST", f"/v1/spaces/{_segment(space_id)}/refresh")
+    def refresh_collection(self, collection_id: int) -> dict:
+        return self._request("POST", f"/v1/collections/{_segment(collection_id)}/refresh")
 
-    def promote_space(self, space_id: int) -> dict:
-        return self._request("POST", f"/v1/spaces/{_segment(space_id)}/promote")
+    def save_collection(self, collection_id: int) -> dict:
+        return self._request("POST", f"/v1/collections/{_segment(collection_id)}/save")
 
-    def compose_spaces(
-        self, operation: str, space_id_a: int, space_id_b: int, *, name: str = "", space_type: str = "AREA"
+    def compose_collections(
+        self, operation: str, collection_id_a: int, collection_id_b: int, *, name: str = "", collection_type: str = "TEMPORARY"
     ) -> dict:
         """``operation``: union, intersection, difference or symmetric_difference."""
-        return self._request("POST", "/v1/spaces/compose", body={
-            "operation": operation, "space_id_a": space_id_a, "space_id_b": space_id_b,
-            "name": name, "space_type": space_type,
+        return self._request("POST", "/v1/collections/compose", body={
+            "operation": operation, "collection_id_a": collection_id_a, "collection_id_b": collection_id_b,
+            "name": name, "collection_type": collection_type,
         })
 
-    def read_space(self, space_id: int, *, resolution: str = "manifest", query: str = "", limit: int = 50) -> dict:
+    def read_collection(self, collection_id: int, *, resolution: str = "manifest", query: str = "", limit: int = 50) -> dict:
         """``resolution``: count, manifest, chunks or text."""
         return self._request(
-            "POST", f"/v1/spaces/{_segment(space_id)}/read",
+            "POST", f"/v1/collections/{_segment(collection_id)}/read",
             body={"resolution": resolution, "query": query, "limit": limit},
         )
 
@@ -269,16 +269,16 @@ class RAGfly:
         """``type``: ALL, FUNCTIONS or SKILLS."""
         return self._request("GET", "/v1/catalog", params={"type": type})
 
-    def list_document_types(self, *, entity_code: Optional[str] = None) -> dict:
-        """Document types of the entity as a tree. Their codes go in ``filter.document_types``."""
-        return self._request("GET", "/v1/catalog/document-types", params=_query({"entity_code": entity_code}))
+    def list_document_types(self, *, workspace_code: Optional[str] = None) -> dict:
+        """Document types of the workspace as a tree. Their codes go in ``filter.document_types``."""
+        return self._request("GET", "/v1/catalog/document-types", params=_query({"workspace_code": workspace_code}))
 
     def list_characteristics(
-        self, *, document_types: Optional[list] = None, entity_code: Optional[str] = None
+        self, *, document_types: Optional[list] = None, workspace_code: Optional[str] = None
     ) -> dict:
         """Characteristics available for those types (each includes its more specific types)."""
         return self._request("GET", "/v1/catalog/characteristics", params=_query({
-            "document_types": ",".join(document_types) if document_types else None, "entity_code": entity_code,
+            "document_types": ",".join(document_types) if document_types else None, "workspace_code": workspace_code,
         }))
 
     def get_function(self, function_code: str) -> dict:
@@ -291,10 +291,10 @@ class RAGfly:
     def get_skill(self, skill_code: str) -> dict:
         return self._request("GET", f"/v1/skills/{_segment(skill_code)}")
 
-    def run_skill(self, skill_code: str, *, space_id: Optional[int] = None, document_code: Optional[str] = None) -> dict:
+    def run_skill(self, skill_code: str, *, collection_id: Optional[int] = None, document_code: Optional[str] = None) -> dict:
         return self._request(
             "POST", f"/v1/skills/{_segment(skill_code)}/run",
-            body=_compact({"space_id": space_id, "document_code": document_code}),
+            body=_compact({"collection_id": collection_id, "document_code": document_code}),
         )
 
     # ── Answers and agents ───────────────────────────────────────────────────
@@ -356,30 +356,30 @@ class RAGfly:
 
     # ── Organization profile ─────────────────────────────────────────────────
 
-    def get_organization(self, *, entity_code: Optional[str] = None) -> dict:
-        return self._request("GET", "/v1/organization", params={"entity_code": entity_code})
+    def get_organization(self, *, workspace_code: Optional[str] = None) -> dict:
+        return self._request("GET", "/v1/organization", params={"workspace_code": workspace_code})
 
     def update_organization(
         self,
         *,
         group_description: Optional[str] = None,
         group_system_prompt: Optional[str] = None,
-        entity_description: Optional[str] = None,
-        entity_system_prompt: Optional[str] = None,
-        entity_code: Optional[str] = None,
+        workspace_description: Optional[str] = None,
+        workspace_system_prompt: Optional[str] = None,
+        workspace_code: Optional[str] = None,
     ) -> dict:
         """Only the fields you pass are written."""
         return self._request("PUT", "/v1/organization", body=_compact({
             "group_description": group_description,
             "group_system_prompt": group_system_prompt,
-            "entity_description": entity_description,
-            "entity_system_prompt": entity_system_prompt,
-            "entity_code": entity_code,
+            "workspace_description": workspace_description,
+            "workspace_system_prompt": workspace_system_prompt,
+            "workspace_code": workspace_code,
         }))
 
-    def draft_organization(self, *, source_text: str = "", entity_code: Optional[str] = None) -> dict:
+    def draft_organization(self, *, source_text: str = "", workspace_code: Optional[str] = None) -> dict:
         return self._request(
-            "POST", "/v1/organization/draft", body=_compact({"source_text": source_text, "entity_code": entity_code})
+            "POST", "/v1/organization/draft", body=_compact({"source_text": source_text, "workspace_code": workspace_code})
         )
 
     # ── Usage, conversations and processes ───────────────────────────────────

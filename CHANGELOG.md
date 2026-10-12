@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 — 2026-10-12
+
+Vocabulary update: the credential's entity is now a **workspace** and a working space is now a **collection**. There are no aliases: the old names are removed.
+
+- Renamed: `set_active_entity` -> `set_active_workspace(workspace_code)`; `list_spaces` -> `list_collections`; `get_space` -> `get_collection`; `refresh_space` -> `refresh_collection`; `promote_space` -> `save_collection`; `compose_spaces` -> `compose_collections`; `read_space` -> `read_collection`.
+- Renamed parameters: `entity_code` -> `workspace_code`; `space_id` -> `collection_id` (also on `search`, `search_filtered`, `run_skill`); `space_id_a` / `space_id_b` -> `collection_id_a` / `collection_id_b`; `space_type` -> `collection_type` (`TEMPORARY` by default, `SAVED` for a saved collection; formerly `AREA` / `SPACE`); `entity_description` / `entity_system_prompt` -> `workspace_description` / `workspace_system_prompt`.
+- REST routes called: `POST /v1/session/active-workspace`, `/v1/collections`, `/v1/collections/{id}`, `/v1/collections/compose`, `/v1/collections/{id}/read`, `/v1/collections/{id}/refresh` and `/v1/collections/{id}/save`.
+- Responses keep the server's field names: `active_workspace`, `available_workspaces`, `collections[]`, `collection_id`, `scope` `WORKSPACE`.
+- Requires a RAGfly Cloud that serves the new `/v1` vocabulary.
+
 ## 0.5.0 — 2026-10-08
 
 - New `set_active_area(area_code)` (pass `None` to release the area focus and keep the entity), `list_areas()` and `list_locations()` with `entity_code`, `parent_code`, `query`, `limit` and `cursor` paging.
