@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0 — 2026-10-23
+
+- New `unset_active_workspace()`: releases the workspace focus of a flexible key (`DELETE /v1/session/active-workspace`), the same as `set_active_workspace(None)`. A fixed-workspace key cannot release its workspace. Requires a RAGfly Cloud that serves that route.
+
 ## 0.6.0 — 2026-10-12
 
 Vocabulary update: the credential's entity is now a **workspace** and a working space is now a **collection**. There are no aliases: the old names are removed.

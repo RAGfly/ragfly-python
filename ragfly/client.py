@@ -108,6 +108,10 @@ class RAGfly:
             "POST", "/v1/session/active-workspace", body={"workspace_code": workspace_code}
         )
 
+    def unset_active_workspace(self) -> dict:
+        """Release the workspace focus (same as ``set_active_workspace(None)``); a fixed-workspace key cannot."""
+        return self._request("DELETE", "/v1/session/active-workspace")
+
     def set_active_area(self, area_code: Optional[str]) -> dict:
         """Set an authorized area focus (it also selects its workspace); pass ``None`` to release it."""
         return self._request("POST", "/v1/session/active-area", body={"area_code": area_code})
