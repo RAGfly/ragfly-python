@@ -73,12 +73,13 @@ class RAGfly:
 
     # ── Transport ────────────────────────────────────────────────────────────
 
-    def _request(self, method: str, path: str, *, params: Optional[dict] = None, body: Any = None) -> Any:
+    def _request(self, method: str, path: str, *, params: Optional[dict] = None, body: Any = None, headers: Optional[dict] = None) -> Any:
         resp = self._http.request(
             method,
             f"{self._base_url}{path}",
             params=_query(params or {}) or None,
             json=body,
+            headers=headers,
         )
         if resp.status_code >= 400:
             try:
@@ -115,6 +116,10 @@ class RAGfly:
     def set_active_area(self, area_code: Optional[str]) -> dict:
         """Set an authorized area focus (it also selects its workspace); pass ``None`` to release it."""
         return self._request("POST", "/v1/session/active-area", body={"area_code": area_code})
+
+    def list_destinations(self) -> dict:
+        """List published corpora available to the organization."""
+        return self._request("GET", "/v1/destinations")
 
     def list_areas(
         self,
@@ -160,6 +165,15 @@ class RAGfly:
             "GET", f"/v1/documents/{_segment(document_code)}/edges", params={"neighbor_limit": neighbor_limit}
         )
 
+    def ingest_public_url(self, url: str, idempotency_key: str, confirm_public_content: bool = False, *, workspace_code: Optional[str] = None) -> dict:
+        """Start ingestion of a publicly accessible URL with an idempotency key."""
+        return self._request("POST", "/v1/documents/public-url", headers={"Idempotency-Key": idempotency_key},
+                             body=_compact({"url": url, "confirm_public_content": confirm_public_content,
+                                            "workspace_code": workspace_code}))
+
+    def public_url_ingestion_status(self, process_code: str) -> dict:
+        return self._request("GET", f"/v1/documents/public-url/{_segment(process_code)}")
+
     def search(
         self,
         query: str,
@@ -169,6 +183,7 @@ class RAGfly:
         workspace_code: Optional[str] = None,
         collection_id: Optional[int] = None,
         location_code: Optional[str] = None,
+        destination: Optional[dict] = None,
     ) -> SearchResult:
         """Hybrid semantic search (vector + lexical).
 
@@ -178,6 +193,7 @@ class RAGfly:
         return self._search({
             "query": query, "limit": limit, "min_similarity": min_similarity,
             "workspace_code": workspace_code, "collection_id": collection_id, "location_code": location_code,
+            "destination": destination,
         }, query)
 
     def search_filtered(
@@ -245,6 +261,13 @@ class RAGfly:
     def save_collection(self, collection_id: int) -> dict:
         return self._request("POST", f"/v1/collections/{_segment(collection_id)}/save")
 
+    def save_search_as_collection(self, query: str, *, max_documents: int = 100, name: str = "", collection_type: str = "SAVED",
+                                  collection_id: Optional[int] = None, filter: Optional[dict] = None,
+                                  location_code: Optional[str] = None) -> dict:
+        return self._request("POST", "/v1/collections/from-search", body=_compact({"query": query, "max_documents": max_documents,
+                             "name": name, "collection_type": collection_type, "collection_id": collection_id,
+                             "filter": filter, "location_code": location_code}))
+
     def compose_collections(
         self, operation: str, collection_id_a: int, collection_id_b: int, *, name: str = "", collection_type: str = "TEMPORARY"
     ) -> dict:
@@ -311,6 +334,7 @@ class RAGfly:
         function_code: str = DEFAULT_FUNCTION,
         location_code: Optional[str] = None,
         mode: Optional[str] = None,
+        destination: Optional[dict] = None,
     ) -> AskResponse:
         """RAG end to end: retrieve and generate. Reuse ``conversation_id`` to continue.
 
@@ -323,7 +347,7 @@ class RAGfly:
             raise ValueError("mode must be 'default' or 'help'")
         data = self._request("POST", "/v1/ask", body=_compact({
             "question": question, "conversation_id": conversation_id, "function_code": function_code,
-            "location_code": location_code, "mode": mode,
+            "location_code": location_code, "mode": mode, "destination": destination,
         })) or {}
         return AskResponse(
             answer=data.get("answer", ""),

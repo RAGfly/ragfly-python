@@ -44,6 +44,30 @@ def test_parity_case(case):
     assert (json.loads(request.content) if request.content else None) == expected["body"]
     assert request.headers["Authorization"] == "Bearer rf_test"
     assert request.headers[CASES["client_header"]["name"]] == CASES["client_header"]["python"]
+    if case["method"] == "ingest_public_url":
+        assert request.headers["Idempotency-Key"] == case["args"]["idempotency_key"]
+
+
+def test_destination_is_forwarded_to_search_and_ask():
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+    destination = {"module": "regulation", "country": "CL", "workspace_code": "W"}
+    with _client(handler) as client:
+        client.search("query", destination=destination)
+        client.ask("question", destination=destination)
+    assert [body["destination"] for body in seen] == [destination, destination]
+
+
+def test_collection_from_search_matches_api_defaults():
+    seen = []
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+    with _client(handler) as client:
+        client.save_search_as_collection("query", location_code="L1")
+    assert seen == [{"query": "query", "max_documents": 100, "name": "", "collection_type": "SAVED", "location_code": "L1"}]
 
 
 def test_every_public_method_has_a_parity_case():
