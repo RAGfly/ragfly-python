@@ -169,15 +169,19 @@ class RAGfly:
         workspace_code: Optional[str] = None,
         collection_id: Optional[int] = None,
         location_code: Optional[str] = None,
+        destination: Optional[dict] = None,
     ) -> SearchResult:
         """Hybrid semantic search (vector + lexical).
 
         ``collection_id`` limits it to one collection; ``location_code`` to one visible folder subtree,
-        for this request only.
+        for this request only. ``destination`` reads a published corpus instead of your documents, e.g.
+        ``{"module": "regulation", "country": "CL"}`` (optionally ``workspace_code`` and ``area_code``);
+        see :meth:`list_destinations`. Usage stays in your organization.
         """
         return self._search({
             "query": query, "limit": limit, "min_similarity": min_similarity,
             "workspace_code": workspace_code, "collection_id": collection_id, "location_code": location_code,
+            "destination": destination,
         }, query)
 
     def search_filtered(
@@ -311,25 +315,33 @@ class RAGfly:
         function_code: str = DEFAULT_FUNCTION,
         location_code: Optional[str] = None,
         mode: Optional[str] = None,
+        destination: Optional[dict] = None,
     ) -> AskResponse:
         """RAG end to end: retrieve and generate. Reuse ``conversation_id`` to continue.
 
         ``mode="help"`` answers questions about RAGfly itself (how to use or integrate it)
         instead of searching your documents, without links to web screens. Left as ``None``
         the call is the usual document answer. ``location_code`` narrows only this request to one
-        visible folder subtree.
+        visible folder subtree. ``destination`` answers from a published corpus (see
+        :meth:`list_destinations`); the conversation is bound to it, so reuse ``conversation_id``
+        only with the same destination.
         """
         if mode not in (None, "default", "help"):
             raise ValueError("mode must be 'default' or 'help'")
         data = self._request("POST", "/v1/ask", body=_compact({
             "question": question, "conversation_id": conversation_id, "function_code": function_code,
-            "location_code": location_code, "mode": mode,
+            "location_code": location_code, "mode": mode, "destination": destination,
         })) or {}
         return AskResponse(
             answer=data.get("answer", ""),
             conversation_id=data.get("conversation_id"),
             extra={k: v for k, v in data.items() if k not in {"answer", "conversation_id"}},
         )
+
+    def list_destinations(self) -> dict:
+        """Published corpora you can read with ``destination`` (e.g. Chilean regulation), their
+        regulatory areas, and whether reading them is enabled for your organization."""
+        return self._request("GET", "/v1/destinations")
 
     def agent_context(self, *, function_profile: str = "user_chat") -> AgentContext:
         """The authenticated prompt, identity and tools for an agent."""
